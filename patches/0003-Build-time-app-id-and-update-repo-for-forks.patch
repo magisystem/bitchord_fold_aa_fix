@@ -1,4 +1,4 @@
-From 7b365c99888505bc099c2f6cc0328eb7499c928b Mon Sep 17 00:00:00 2001
+From 6e61fc537e7d600c11d20f44798024a893f863e0 Mon Sep 17 00:00:00 2001
 From: Davide Martelli <reg+ia@davidemartelli.dev>
 Date: Mon, 9 Nov 2026 00:36:46 +0100
 Subject: [PATCH 3/3] Build-time app id and update repo for forks
@@ -12,7 +12,8 @@ Claude-Session: https://claude.ai/code/session_014ZLg5hgq5iTvbfjb7JLYDe
 ---
  app/build.gradle.kts                                         | 5 ++++-
  .../main/java/com/music/bitchord/data/AppUpdateChecker.kt    | 5 +++--
- 2 files changed, 7 insertions(+), 3 deletions(-)
+ tv/build.gradle.kts                                          | 2 ++
+ 3 files changed, 9 insertions(+), 3 deletions(-)
 
 diff --git a/app/build.gradle.kts b/app/build.gradle.kts
 index dbf52e5..c940d64 100644
@@ -53,6 +54,19 @@ index 76bcb13..554321f 100644
  
      private val json = Json { ignoreUnknownKeys = true }
  
+diff --git a/tv/build.gradle.kts b/tv/build.gradle.kts
+index 408157a..3b0a942 100644
+--- a/tv/build.gradle.kts
++++ b/tv/build.gradle.kts
+@@ -103,6 +103,8 @@ android {
+         // the updater installs the TV app here, never the phone app. See
+         // AppUpdateChecker.apkAssetUrl.
+         buildConfigField("String", "UPDATE_APK_PREFIX", "\"BitChordTV-\"")
++        // [fold-mods] Same field as the phone app: the TV build compiles its sources.
++        buildConfigField("String", "UPDATE_REPO", "\"${System.getenv("FORK_UPDATE_REPO") ?: "kushagrasinghx/BitChord"}\"")
+     }
+ 
+     splits {
 -- 
 2.43.0
 
