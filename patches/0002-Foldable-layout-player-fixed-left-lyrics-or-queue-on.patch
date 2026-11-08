@@ -1,0 +1,163 @@
+From 5da3502df90f0d36b3c9fda169a228866af3098e Mon Sep 17 00:00:00 2001
+From: Davide Martelli <reg+ia@davidemartelli.dev>
+Date: Mon, 9 Nov 2026 00:35:56 +0100
+Subject: [PATCH 2/3] Foldable layout: player fixed left, lyrics or queue on
+ the right
+
+Stock BitChord only splits the player into two columns in a window wider
+than tall, so an unfolded book-style foldable held upright got the phone
+player stretched. Near-square windows now split too, and on a window tall
+enough the left column holds the whole player (sleeve, credits, scrubber,
+transport, actions) while the right shows the lyrics or the queue.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014ZLg5hgq5iTvbfjb7JLYDe
+---
+ .../bitchord/ui/player/LandscapePlayer.kt     | 112 ++++++++++++++++++
+ .../bitchord/ui/player/NowPlayingScreen.kt    |   3 +-
+ 2 files changed, 114 insertions(+), 1 deletion(-)
+
+diff --git a/sharedUi/src/jvmSharedMain/kotlin/com/music/bitchord/ui/player/LandscapePlayer.kt b/sharedUi/src/jvmSharedMain/kotlin/com/music/bitchord/ui/player/LandscapePlayer.kt
+index 594db91..be49776 100644
+--- a/sharedUi/src/jvmSharedMain/kotlin/com/music/bitchord/ui/player/LandscapePlayer.kt
++++ b/sharedUi/src/jvmSharedMain/kotlin/com/music/bitchord/ui/player/LandscapePlayer.kt
+@@ -165,6 +165,12 @@ internal fun LandscapePlayerLayout(
+             val compact = maxHeight < LANDSCAPE_COMPACT_HEIGHT
+             val gutter = if (compact) LANDSCAPE_GUTTER_COMPACT else PLAYER_GUTTER
+ 
++            // [fold-mods] Tall enough for the controls under the sleeve: player on
++            // the left, lyrics or queue on the right. A phone on its side keeps
++            // the stock layout below.
++            if (!compact && maxHeight >= FOLD_LAYOUT_MIN_HEIGHT) {
++                FoldPlayerRow(pane, gutter, artwork, actions, mainPane, lyricsPane, queuePane)
++            } else
+             Row(
+                 modifier = Modifier
+                     .widthIn(max = LANDSCAPE_PLAYER_MAX_WIDTH)
+@@ -568,3 +574,109 @@ internal fun LandscapeLyricsPane(
+         }
+     }
+ }
++
++// ---------------------------------------------------------------------------
++// [fold-mods] Foldable layout
++// ---------------------------------------------------------------------------
++
++/** Least height for the fold layout: sleeve, credits, transport and actions stacked. */
++private val FOLD_LAYOUT_MIN_HEIGHT = 600.dp
++
++/** Least width for the two-column player on a near-square window. */
++private val FOLD_PLAYER_MIN_WIDTH = 600.dp
++
++/**
++ * How narrow, against its height, a window may be and still split in two: an
++ * unfolded book-style foldable held upright is a little taller than wide; a
++ * tablet in portrait is far taller and keeps the portrait player.
++ */
++private const val FOLD_PLAYER_MIN_ASPECT = 0.75f
++
++/**
++ * [fold-mods] Whether a near-square window — the inner screen of an unfolded
++ * foldable, held either way — takes the two-column player too. Stock BitChord
++ * only splits a window that is wider than tall, which an unfolded Fold held
++ * upright is not.
++ */
++internal fun foldPlayerAvailable(
++    windowWidth: androidx.compose.ui.unit.Dp,
++    windowHeight: androidx.compose.ui.unit.Dp,
++): Boolean =
++    windowWidth >= FOLD_PLAYER_MIN_WIDTH &&
++        windowHeight >= FOLD_LAYOUT_MIN_HEIGHT &&
++        windowWidth >= windowHeight * FOLD_PLAYER_MIN_ASPECT
++
++/**
++ * [fold-mods] The player fixed in the left column — sleeve, credits, scrubber,
++ * transport and the lyrics / output / queue row — and the right column given
++ * over to whichever of the lyrics or the queue was picked from that row.
++ * With neither picked the right column shows the lyrics, since the transport
++ * it would otherwise hold is already on the left.
++ */
++@Composable
++private fun FoldPlayerRow(
++    pane: PlayerPane,
++    gutter: androidx.compose.ui.unit.Dp,
++    artwork: @Composable (Modifier) -> Unit,
++    actions: @Composable () -> Unit,
++    mainPane: @Composable (compact: Boolean) -> Unit,
++    lyricsPane: @Composable () -> Unit,
++    queuePane: @Composable () -> Unit,
++) {
++    Row(
++        modifier = Modifier
++            .widthIn(max = LANDSCAPE_PLAYER_MAX_WIDTH)
++            .fillMaxSize()
++            .padding(top = LANDSCAPE_HANDLE_STRIP, bottom = 20.dp),
++    ) {
++        Column(
++            modifier = Modifier
++                .weight(1f)
++                .fillMaxHeight()
++                .padding(horizontal = gutter),
++            horizontalAlignment = Alignment.CenterHorizontally,
++        ) {
++            // The sleeve takes what the controls leave, square.
++            BoxWithConstraints(
++                modifier = Modifier
++                    .weight(1f)
++                    .fillMaxWidth(),
++                contentAlignment = Alignment.Center,
++            ) {
++                artwork(Modifier.size(minOf(maxWidth, maxHeight)))
++            }
++            Spacer(Modifier.height(16.dp))
++            mainPane(false)
++            Spacer(Modifier.height(16.dp))
++            actions()
++        }
++
++        val side = if (pane == PlayerPane.Queue) PlayerPane.Queue else PlayerPane.Lyrics
++        AnimatedContent(
++            targetState = side,
++            transitionSpec = {
++                fadeIn(
++                    tween(
++                        LANDSCAPE_PANE_FADE_IN_MS,
++                        delayMillis = LANDSCAPE_PANE_FADE_IN_DELAY_MS,
++                    ),
++                ) togetherWith fadeOut(tween(LANDSCAPE_PANE_FADE_OUT_MS))
++            },
++            contentAlignment = Alignment.Center,
++            modifier = Modifier
++                .weight(1f)
++                .fillMaxHeight(),
++            label = "foldPane",
++        ) { shown ->
++            // Lyrics and queue reach back across [PLAYER_GUTTER] themselves,
++            // as in the stock landscape layout.
++            Box(
++                Modifier
++                    .fillMaxSize()
++                    .padding(horizontal = PLAYER_GUTTER),
++            ) {
++                if (shown == PlayerPane.Queue) queuePane() else lyricsPane()
++            }
++        }
++    }
++}
+diff --git a/sharedUi/src/jvmSharedMain/kotlin/com/music/bitchord/ui/player/NowPlayingScreen.kt b/sharedUi/src/jvmSharedMain/kotlin/com/music/bitchord/ui/player/NowPlayingScreen.kt
+index 9f0a71c..ac79db4 100644
+--- a/sharedUi/src/jvmSharedMain/kotlin/com/music/bitchord/ui/player/NowPlayingScreen.kt
++++ b/sharedUi/src/jvmSharedMain/kotlin/com/music/bitchord/ui/player/NowPlayingScreen.kt
+@@ -618,7 +618,8 @@ private fun tabletSizedPlayer(windowWidth: Dp): Boolean =
+  * is the shape it was drawn for.
+  */
+ fun landscapePlayerAvailable(windowWidth: Dp, windowHeight: Dp): Boolean =
+-    windowWidth > windowHeight && windowWidth >= LANDSCAPE_PLAYER_MIN_WIDTH
++    windowWidth > windowHeight && windowWidth >= LANDSCAPE_PLAYER_MIN_WIDTH ||
++        foldPlayerAvailable(windowWidth, windowHeight) // [fold-mods]
+ 
+ /** How long the player stands under the lyrics untouched before standing down. */
+ private const val LYRICS_CONTROLS_IDLE_MS = 5_000L
+-- 
+2.43.0
+

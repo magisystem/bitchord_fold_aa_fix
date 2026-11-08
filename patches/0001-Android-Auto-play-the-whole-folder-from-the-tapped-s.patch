@@ -1,0 +1,94 @@
+From b3eefd9c427895f96df496063659b45c7925a89f Mon Sep 17 00:00:00 2001
+From: Davide Martelli <reg+ia@davidemartelli.dev>
+Date: Mon, 9 Nov 2026 00:34:22 +0100
+Subject: [PATCH 1/3] Android Auto: play the whole folder from the tapped song
+
+Auto hands onSetMediaItems only the song tapped, which became a one-song
+queue that AutoPlay then filled with unrelated radio. Remember each browsed
+folder's songs and widen an outside controller's single tap back to the
+folder, starting at that song.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014ZLg5hgq5iTvbfjb7JLYDe
+---
+ .../bitchord/playback/PlaybackService.kt      | 50 +++++++++++++++++++
+ 1 file changed, 50 insertions(+)
+
+diff --git a/app/src/main/java/com/music/bitchord/playback/PlaybackService.kt b/app/src/main/java/com/music/bitchord/playback/PlaybackService.kt
+index e59b7c6..4243e33 100644
+--- a/app/src/main/java/com/music/bitchord/playback/PlaybackService.kt
++++ b/app/src/main/java/com/music/bitchord/playback/PlaybackService.kt
+@@ -316,6 +316,43 @@ class PlaybackService : MediaLibraryService() {
+     private val searchBrowseResults = ConcurrentHashMap<String, List<BrowseItem>>()
+     private val songCache = ConcurrentHashMap<String, Song>()
+ 
++    /**
++     * [fold-mods] Android Auto folder context.
++     *
++     * Auto lists a folder's songs by their bare videoId and, on a tap, hands
++     * [MediaLibraryCallback.onSetMediaItems] only the one song tapped. Resolved
++     * as-is that is a one-song queue, which AutoPlay then fills with radio —
++     * so the next track came from outside the playlist. Each folder's song list
++     * is kept here as it is browsed, so a tap can be widened back to the whole
++     * folder, starting at the song tapped.
++     */
++    private val autoFolderSongs = java.util.Collections.synchronizedMap(
++        object : LinkedHashMap<String, List<Song>>(16, 0.75f, true) {
++            override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, List<Song>>?): Boolean =
++                size > 24
++        },
++    )
++    private val autoSongFolder = ConcurrentHashMap<String, String>()
++
++    private fun rememberAutoFolder(parentId: String, items: List<MediaItem>) {
++        val songs = items
++            .filter { it.mediaMetadata.isBrowsable != true && !it.mediaId.startsWith("msg:") }
++            .mapNotNull { songCache[it.mediaId] }
++        if (songs.size < 2) return
++        autoFolderSongs[parentId] = songs
++        if (autoSongFolder.size > 20_000) autoSongFolder.clear()
++        songs.forEach { autoSongFolder[it.videoId] = parentId }
++    }
++
++    /** The folder a single Auto tap came from, and where in it to start; null if unknown. */
++    private fun autoFolderFor(mediaItems: List<MediaItem>): Pair<List<Song>, Int>? {
++        val tapped = mediaItems.singleOrNull() ?: return null
++        val folderId = autoSongFolder[tapped.mediaId] ?: return null
++        val songs = autoFolderSongs[folderId] ?: return null
++        val index = songs.indexOfFirst { it.videoId == tapped.mediaId }
++        return if (index >= 0 && songs.size > 1) songs to index else null
++    }
++
+     /**
+      * [YtMusicRepository.home] cached briefly for Android Auto's browse tree.
+      *
+@@ -8936,6 +8973,7 @@ class PlaybackService : MediaLibraryService() {
+                     }
+                 }
+             }
++            rememberAutoFolder(parentId, items) // [fold-mods]
+             val returnParams = LibraryParams.Builder().setExtras(
+                 buildContentStyleBundle(
+                     if (isGridFolder) CONTENT_STYLE_GRID_ITEM_HINT_VALUE else CONTENT_STYLE_LIST_ITEM_HINT_VALUE,
+@@ -9107,6 +9145,18 @@ class PlaybackService : MediaLibraryService() {
+             startIndex: Int,
+             startPositionMs: Long,
+         ): ListenableFuture<MediaSession.MediaItemsWithStartPosition> = scope.future(Dispatchers.IO) {
++            // [fold-mods] A tap in an Auto folder plays the folder from that song.
++            // Only for outside controllers (Android Auto): the app's own UI builds
++            // its queues itself and a one-off song from Search must stay one-off.
++            if (controller.packageName != this@PlaybackService.packageName) {
++                autoFolderFor(mediaItems)?.let { (songs, index) ->
++                    return@future MediaSession.MediaItemsWithStartPosition(
++                        ImmutableList.copyOf(songs.map { it.toMediaItem() }),
++                        index,
++                        startPositionMs.coerceAtLeast(0L),
++                    )
++                }
++            }
+             val resolved = resolveMediaItems(mediaItems)
+             val validIndex = startIndex.coerceIn(0, (resolved.size - 1).coerceAtLeast(0))
+             MediaSession.MediaItemsWithStartPosition(
+-- 
+2.43.0
+

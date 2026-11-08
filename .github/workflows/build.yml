@@ -1,0 +1,164 @@
+name: Build BitChord Fold
+
+# Ogni giorno controlla se è uscita una nuova release di BitChord.
+# Se sì: applica le patch, compila, firma e pubblica l'APK come release
+# di questo repository. L'app installata se ne accorge da sola all'avvio.
+on:
+  schedule:
+    - cron: '17 5 * * *'   # 05:17 UTC, ~06:17/07:17 in Italia
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Tag upstream da compilare (vuoto = ultima release)'
+        required: false
+        default: ''
+      force:
+        description: 'Ricompila anche se la release esiste già'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write   # creare le release
+  issues: write     # aprire una issue se una patch non si applica
+
+concurrency:
+  group: build-fold
+  cancel-in-progress: false
+
+env:
+  UPSTREAM: kushagrasinghx/BitChord
+  FORK_APPLICATION_ID: com.music.bitchord.fold
+  FORK_APP_NAME: BitChord Fold
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.pick.outputs.tag }}
+      build: ${{ steps.pick.outputs.build }}
+    steps:
+      - name: Trova la release upstream
+        id: pick
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_TAG: ${{ inputs.tag }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          tag="$INPUT_TAG"
+          if [ -z "$tag" ]; then
+            tag=$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name)
+          fi
+          echo "Release upstream: $tag"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          if [ "$FORCE" != "true" ] && gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Già compilata, niente da fare."
+            echo "build=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: check
+    if: needs.check.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      TAG: ${{ needs.check.outputs.tag }}
+      FORK_UPDATE_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Controlla i secret di firma
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ] || [ -z "$KEYSTORE_PASSWORD" ]; then
+            echo "::error::Mancano i secret KEYSTORE_BASE64 / KEYSTORE_PASSWORD / KEY_ALIAS / KEY_PASSWORD (vedi README)."
+            exit 1
+          fi
+
+      - name: Applica le patch
+        id: patch
+        run: bash scripts/prepare-source.sh "$TAG" src
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          java-version: '17'
+          distribution: temurin
+
+      - name: Cache Gradle
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: gradle-${{ runner.os }}-${{ hashFiles('src/**/*.gradle.kts', 'src/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: gradle-${{ runner.os }}-
+
+      - name: Firma e chiavi opzionali
+        working-directory: src
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          LASTFM_API_KEY: ${{ secrets.LASTFM_API_KEY }}
+          LASTFM_SECRET: ${{ secrets.LASTFM_SECRET }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 -d > fold-release.jks
+          {
+            echo "storeFile=fold-release.jks"
+            echo "storePassword=$KEYSTORE_PASSWORD"
+            echo "keyAlias=$KEY_ALIAS"
+            echo "keyPassword=$KEY_PASSWORD"
+          } > keystore.properties
+          {
+            echo "LASTFM_API_KEY=$LASTFM_API_KEY"
+            echo "LASTFM_SECRET=$LASTFM_SECRET"
+          } > local.properties
+
+      - name: Compila
+        working-directory: src
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleProdRelease
+
+      - name: Prepara gli APK
+        run: |
+          out=src/app/build/outputs/apk/prod/release
+          ls -la "$out"
+          mkdir -p dist
+          cp "$out/app-prod-universal-release.apk" "dist/BitChord-${TAG}.apk"
+          cp "$out/app-prod-arm64-v8a-release.apk" "dist/BitChord-${TAG}_arm64-v8a.apk"
+          ls -la dist
+
+      - name: Pubblica la release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          notes=$(mktemp)
+          {
+            echo "BitChord **${TAG}** con le modifiche di questo repository:"
+            echo
+            for p in patches/*.patch; do
+              echo "- $(sed -n 's/^Subject: \[PATCH[^]]*\] //p' "$p" | head -n1)"
+            done
+            echo
+            echo "Novità della versione ufficiale: https://github.com/${UPSTREAM}/releases/tag/${TAG}"
+          } > "$notes"
+          gh release delete "$TAG" -R "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$TAG" dist/*.apk -R "$GITHUB_REPOSITORY" \
+            --title "BitChord Fold ${TAG}" --notes-file "$notes" --target "$GITHUB_SHA"
+
+      - name: Segnala la patch da riadattare
+        if: failure() && steps.patch.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          title="Patch da riadattare per ${TAG}"
+          if [ -z "$(gh issue list -R "$GITHUB_REPOSITORY" --state open --search "$title in:title" --json number --jq '.[].number')" ]; then
+            gh issue create -R "$GITHUB_REPOSITORY" --title "$title" --body \
+              "Una delle patch non si applica più su ${TAG}: lo sviluppatore ha cambiato quel codice. Dettagli nel log: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          fi

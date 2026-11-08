@@ -1,0 +1,58 @@
+From 7b365c99888505bc099c2f6cc0328eb7499c928b Mon Sep 17 00:00:00 2001
+From: Davide Martelli <reg+ia@davidemartelli.dev>
+Date: Mon, 9 Nov 2026 00:36:46 +0100
+Subject: [PATCH 3/3] Build-time app id and update repo for forks
+
+FORK_APPLICATION_ID lets the build install beside the official app, and
+FORK_UPDATE_REPO points the in-app updater at the fork's own releases.
+Both default to the stock values, so an unset build is unchanged.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014ZLg5hgq5iTvbfjb7JLYDe
+---
+ app/build.gradle.kts                                         | 5 ++++-
+ .../main/java/com/music/bitchord/data/AppUpdateChecker.kt    | 5 +++--
+ 2 files changed, 7 insertions(+), 3 deletions(-)
+
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index dbf52e5..c940d64 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -74,7 +74,8 @@ android {
+     compileSdk = 37
+ 
+     defaultConfig {
+-        applicationId = "com.music.bitchord"
++        // [fold-mods] Overridable so the fork installs beside the official app.
++        applicationId = System.getenv("FORK_APPLICATION_ID") ?: "com.music.bitchord"
+         // 26 keeps reach wide; real-time blur (RenderEffect) kicks in on API 31+,
+         // Haze falls back to a translucent scrim below that.
+         minSdk = 26
+@@ -101,6 +102,8 @@ android {
+         // the same GitHub release, told apart by file name. See
+         // AppUpdateChecker.apkAssetUrl.
+         buildConfigField("String", "UPDATE_APK_PREFIX", "\"BitChord-\"")
++        // [fold-mods] Which repo's releases the in-app updater follows.
++        buildConfigField("String", "UPDATE_REPO", "\"${System.getenv("FORK_UPDATE_REPO") ?: "kushagrasinghx/BitChord"}\"")
+     }
+ 
+     splits {
+diff --git a/app/src/main/java/com/music/bitchord/data/AppUpdateChecker.kt b/app/src/main/java/com/music/bitchord/data/AppUpdateChecker.kt
+index 76bcb13..554321f 100644
+--- a/app/src/main/java/com/music/bitchord/data/AppUpdateChecker.kt
++++ b/app/src/main/java/com/music/bitchord/data/AppUpdateChecker.kt
+@@ -42,8 +42,9 @@ object AppUpdateChecker {
+ 
+     private const val CACHE_SUBDIR = "updates"
+ 
+-    private const val LATEST_RELEASE_URL =
+-        "https://api.github.com/repos/kushagrasinghx/BitChord/releases/latest"
++    // [fold-mods] The repo comes from the build, so a fork updates from itself.
++    private val LATEST_RELEASE_URL =
++        "https://api.github.com/repos/${BuildConfig.UPDATE_REPO}/releases/latest"
+ 
+     private val json = Json { ignoreUnknownKeys = true }
+ 
+-- 
+2.43.0
+

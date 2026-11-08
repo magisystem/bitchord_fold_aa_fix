@@ -1,0 +1,7 @@
+*.jks
+keystore.properties
+local.properties
+SECRET-GITHUB.txt
+*.base64.txt
+/src/
+/dist/
