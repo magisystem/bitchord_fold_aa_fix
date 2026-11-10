@@ -1,0 +1,362 @@
+From 91c2b7d5080f347602c4190b22ad3f39205ed629 Mon Sep 17 00:00:00 2001
+From: Davide Martelli <reg+ia@davidemartelli.dev>
+Date: Tue, 10 Nov 2026 20:09:22 +0100
+Subject: [PATCH 4/5] Android Auto: local music by artist, album and song;
+ shortcut in Playlists
+
+Stock BitChord lists the device's music in Auto as one flat list sorted by
+title. Local music now opens on All songs plus the artists; an artist opens
+on its albums, and an album on its tracks in disc order. Albums are filed
+under the artist most of their tracks credit (feat. guests aside), else under
+Various artists; tracks with no album go under Other songs. A Local music
+tile leads Auto's Playlists grid.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014ZLg5hgq5iTvbfjb7JLYDe
+---
+ .../bitchord/playback/AutoLocalLibrary.kt     | 128 ++++++++++++++++++
+ .../bitchord/playback/PlaybackService.kt      | 117 +++++++++++++++-
+ app/src/main/res/values-it/fold_strings.xml   |  17 +++
+ app/src/main/res/values/fold_strings.xml      |  15 ++
+ 4 files changed, 273 insertions(+), 4 deletions(-)
+ create mode 100644 app/src/main/java/com/music/bitchord/playback/AutoLocalLibrary.kt
+ create mode 100644 app/src/main/res/values-it/fold_strings.xml
+ create mode 100644 app/src/main/res/values/fold_strings.xml
+
+diff --git a/app/src/main/java/com/music/bitchord/playback/AutoLocalLibrary.kt b/app/src/main/java/com/music/bitchord/playback/AutoLocalLibrary.kt
+new file mode 100644
+index 0000000..906cd3a
+--- /dev/null
++++ b/app/src/main/java/com/music/bitchord/playback/AutoLocalLibrary.kt
+@@ -0,0 +1,128 @@
++package com.music.bitchord.playback
++
++import android.net.Uri
++import com.music.bitchord.data.model.Song
++import java.text.Collator
++import java.util.Locale
++
++/**
++ * [fold-mods] The device's own music, arranged for Android Auto the way a
++ * music library is browsed: artist, then album, then the album's tracks in
++ * order.
++ *
++ * Stock BitChord hands Auto the whole local library as one flat list sorted by
++ * title, which is unusable past a few dozen songs.
++ *
++ * Grouping rules:
++ * - An album is the tracks sharing an album name and album art id, so two
++ *   different "Greatest Hits" stay apart.
++ * - It is filed under the artist most of its tracks credit, with "feat." guests
++ *   ignored for the vote; with no majority it goes under "Various artists".
++ * - Tracks with no album go into an "Other songs" entry under their artist.
++ *
++ * The ids are built from names rather than positions, so one Auto browses
++ * across a rebuild of the library still lands on the same folder.
++ */
++internal object AutoLocalLibrary {
++    const val ALL_ID = "local_all"
++    const val ARTIST_PREFIX = "local_artist:"
++    const val ALBUM_PREFIX = "local_album:"
++
++    private const val VARIOUS_KEY = "~various"
++    private const val LOOSE_KEY = "~loose"
++
++    /** [title] null: the artist's tracks with no album. */
++    class Album(val id: String, val title: String?, val songs: List<Song>) {
++        val artUrl: String? get() = songs.firstNotNullOfOrNull { it.thumbnailUrl }
++    }
++
++    /** [name] null: "Various artists". */
++    class Artist(val id: String, val name: String?, val albums: List<Album>) {
++        val songCount: Int get() = albums.sumOf { it.songs.size }
++        val albumCount: Int get() = albums.count { it.title != null }
++        val artUrl: String? get() = albums.firstNotNullOfOrNull { it.artUrl }
++    }
++
++    class Library(val songs: List<Song>, val artists: List<Artist>) {
++        private val byArtist = artists.associateBy { it.id }
++        private val byAlbum = artists.flatMap { it.albums }.associateBy { it.id }
++
++        fun artist(id: String): Artist? = byArtist[id]
++        fun album(id: String): Album? = byAlbum[id]
++
++        /** Every song a folder id stands for, in playing order; null if not ours. */
++        fun songsFor(id: String): List<Song>? = when {
++            id == ALL_ID -> songs
++            id.startsWith(ARTIST_PREFIX) -> artist(id)?.albums?.flatMap { it.songs }
++            id.startsWith(ALBUM_PREFIX) -> album(id)?.songs
++            else -> null
++        }
++    }
++
++    fun isLocalFolder(id: String): Boolean =
++        id == ALL_ID || id.startsWith(ARTIST_PREFIX) || id.startsWith(ALBUM_PREFIX)
++
++    fun build(songs: List<Song>): Library {
++        val collator = Collator.getInstance().apply { strength = Collator.PRIMARY }
++        val trackOrder = compareBy<Song> { it.trackNumber ?: Int.MAX_VALUE }
++            .thenBy(collator) { it.title }
++
++        class Group(val artistKey: String, val artistName: String?, val albumKey: String, val title: String?, val songs: List<Song>)
++
++        val groups = mutableListOf<Group>()
++        val (withAlbum, loose) = songs.partition { !it.albumName.isNullOrBlank() }
++
++        withAlbum.groupBy(::albumKey).forEach { (key, tracks) ->
++            val artist = albumArtist(tracks)
++            groups += Group(
++                artistKey = artist?.let(::artistKey) ?: VARIOUS_KEY,
++                artistName = artist,
++                albumKey = key,
++                title = tracks.first().albumName!!.trim(),
++                songs = tracks.sortedWith(trackOrder),
++            )
++        }
++        loose.groupBy { artistKey(leadArtist(it.artist)) }.forEach { (key, tracks) ->
++            groups += Group(
++                artistKey = key,
++                artistName = leadArtist(tracks.first().artist),
++                albumKey = LOOSE_KEY,
++                title = null,
++                songs = tracks.sortedWith(compareBy<Song, String>(collator) { it.title }),
++            )
++        }
++
++        val artists = groups.groupBy { it.artistKey }.map { (key, albums) ->
++            val encodedArtist = Uri.encode(key)
++            Artist(
++                id = ARTIST_PREFIX + encodedArtist,
++                name = albums.firstNotNullOfOrNull { it.artistName },
++                albums = albums
++                    .sortedWith(compareBy<Group> { it.title == null }.thenBy(collator) { it.title.orEmpty() })
++                    .map { Album(ALBUM_PREFIX + encodedArtist + "/" + Uri.encode(it.albumKey), it.title, it.songs) },
++            )
++        }.sortedWith(compareBy<Artist> { it.name == null }.thenBy(collator) { it.name.orEmpty() })
++
++        return Library(songs, artists)
++    }
++
++    private fun albumKey(song: Song): String {
++        val artId = song.thumbnailUrl?.substringAfterLast("albumart/", "").orEmpty()
++        return artId + "|" + song.albumName.orEmpty().trim().lowercase(Locale.ROOT)
++    }
++
++    private fun artistKey(name: String): String = name.trim().lowercase(Locale.ROOT)
++
++    /** The credited artist without "feat." guests: "A feat. B" and "A (ft. B)" are both "A". */
++    private fun leadArtist(name: String): String =
++        name.split(FEATURING, limit = 2).first().trim().ifBlank { name.trim() }
++
++    /** The artist most of an album's tracks credit, or null if none has a majority. */
++    private fun albumArtist(tracks: List<Song>): String? {
++        val votes = tracks.map { leadArtist(it.artist) }.groupBy(::artistKey)
++        val top = votes.values.maxByOrNull { it.size } ?: return null
++        return if (top.size * 2 > tracks.size) top.first() else null
++    }
++
++    private val FEATURING = Regex("""\s*[(\[]?\s*\b(feat\.?|ft\.|featuring)\s+""", RegexOption.IGNORE_CASE)
++}
+diff --git a/app/src/main/java/com/music/bitchord/playback/PlaybackService.kt b/app/src/main/java/com/music/bitchord/playback/PlaybackService.kt
+index 4243e33..22a360a 100644
+--- a/app/src/main/java/com/music/bitchord/playback/PlaybackService.kt
++++ b/app/src/main/java/com/music/bitchord/playback/PlaybackService.kt
+@@ -344,6 +344,109 @@ class PlaybackService : MediaLibraryService() {
+         songs.forEach { autoSongFolder[it.videoId] = parentId }
+     }
+ 
++    /**
++     * [fold-mods] Local music grouped for Auto, kept for a minute: every level
++     * of artist → album → song is a separate browse, and each would otherwise
++     * rescan MediaStore.
++     */
++    @Volatile
++    private var autoLocalLibraryCache: Pair<Long, AutoLocalLibrary.Library>? = null
++
++    private suspend fun autoLocalLibrary(): AutoLocalLibrary.Library {
++        val now = SystemClock.elapsedRealtime()
++        autoLocalLibraryCache?.let { (at, library) -> if (now - at < 60_000L) return library }
++        val songs = LocalMediaRepository.getLocalMusic(this)
++        return AutoLocalLibrary.build(songs).also { autoLocalLibraryCache = now to it }
++    }
++
++    private fun MediaItem.withArtwork(url: String?): MediaItem {
++        val uri = url.artworkAt(NOTIFICATION_ART_PX)?.let(Uri::parse) ?: return this
++        return buildUpon().setMediaMetadata(mediaMetadata.buildUpon().setArtworkUri(uri).build()).build()
++    }
++
++    private fun autoLocalArtistName(artist: AutoLocalLibrary.Artist): String =
++        artist.name ?: getString(R.string.fold_auto_various_artists)
++
++    private fun autoLocalCounts(albums: Int, songs: Int): String {
++        val songText = resources.getQuantityString(R.plurals.fold_auto_songs, songs, songs)
++        return if (albums > 0) {
++            resources.getQuantityString(R.plurals.fold_auto_albums, albums, albums) + " · " + songText
++        } else {
++            songText
++        }
++    }
++
++    private fun autoLocalAllItem(library: AutoLocalLibrary.Library?): MediaItem =
++        createFolderItem(
++            AutoLocalLibrary.ALL_ID,
++            getString(R.string.fold_auto_all_songs),
++            subtitle = library?.let { autoLocalCounts(0, it.songs.size) },
++            folderType = MediaMetadata.FOLDER_TYPE_TITLES,
++        )
++
++    private fun autoLocalArtistItem(artist: AutoLocalLibrary.Artist): MediaItem =
++        createFolderItem(
++            artist.id,
++            autoLocalArtistName(artist),
++            subtitle = autoLocalCounts(artist.albumCount, artist.songCount),
++            folderType = MediaMetadata.FOLDER_TYPE_ALBUMS,
++            isGrid = true,
++        ).withArtwork(artist.artUrl)
++
++    private fun autoLocalAlbumItem(artist: AutoLocalLibrary.Artist?, album: AutoLocalLibrary.Album): MediaItem =
++        createFolderItem(
++            album.id,
++            album.title ?: getString(R.string.fold_auto_other_songs),
++            subtitle = artist?.let(::autoLocalArtistName),
++            folderType = MediaMetadata.FOLDER_TYPE_TITLES,
++        ).withArtwork(album.artUrl)
++
++    /** The "Local music" tile at the head of Auto's Playlists grid. */
++    private suspend fun autoLocalShortcutItem(): MediaItem {
++        val art = runCatching { autoLocalLibrary().artists.firstNotNullOfOrNull { it.artUrl } }.getOrNull()
++        return createFolderItem(MEDIA_LOCAL_MUSIC_ID, getString(R.string.local_music)).withArtwork(art)
++    }
++
++    /** Children of Auto's Local music folders; null for any other id. */
++    private suspend fun autoLocalChildren(parentId: String): List<MediaItem>? {
++        if (parentId != MEDIA_LOCAL_MUSIC_ID && !AutoLocalLibrary.isLocalFolder(parentId)) return null
++        val library = autoLocalLibrary()
++        library.songs.forEach { songCache[it.videoId] = it }
++        return when {
++            parentId == MEDIA_LOCAL_MUSIC_ID ->
++                if (library.songs.isEmpty()) {
++                    listOf(
++                        createInfoItem(
++                            "msg:empty_local",
++                            getString(R.string.auto_empty_offline_title),
++                            getString(R.string.auto_empty_offline_subtitle),
++                        ),
++                    )
++                } else {
++                    listOf(autoLocalAllItem(library)) + library.artists.map(::autoLocalArtistItem)
++                }
++            parentId.startsWith(AutoLocalLibrary.ARTIST_PREFIX) -> {
++                val artist = library.artist(parentId)
++                artist?.albums?.map { autoLocalAlbumItem(artist, it) }.orEmpty()
++            }
++            else -> library.songsFor(parentId).orEmpty().map { it.toMediaItem() }
++        }
++    }
++
++    /** Auto's Local music folder ids as items, for [MediaLibraryCallback.onGetItem]. */
++    private suspend fun autoLocalItem(mediaId: String): MediaItem? {
++        if (!AutoLocalLibrary.isLocalFolder(mediaId)) return null
++        val library = autoLocalLibrary()
++        return when {
++            mediaId == AutoLocalLibrary.ALL_ID -> autoLocalAllItem(library)
++            mediaId.startsWith(AutoLocalLibrary.ARTIST_PREFIX) -> library.artist(mediaId)?.let(::autoLocalArtistItem)
++            else -> {
++                val album = library.album(mediaId) ?: return null
++                autoLocalAlbumItem(library.artists.firstOrNull { album in it.albums }, album)
++            }
++        }
++    }
++
+     /** The folder a single Auto tap came from, and where in it to start; null if unknown. */
+     private fun autoFolderFor(mediaItems: List<MediaItem>): Pair<List<Song>, Int>? {
+         val tapped = mediaItems.singleOrNull() ?: return null
+@@ -8800,8 +8903,9 @@ class PlaybackService : MediaLibraryService() {
+             pageSize: Int,
+             params: LibraryParams?,
+         ): ListenableFuture<LibraryResult<ImmutableList<MediaItem>>> = scope.future(Dispatchers.IO) {
+-            val isGridFolder = parentId == MEDIA_ROOT_ID || parentId == MEDIA_PLAYLISTS_ID
+-            val items: List<MediaItem> = when (parentId) {
++            val isGridFolder = parentId == MEDIA_ROOT_ID || parentId == MEDIA_PLAYLISTS_ID ||
++                parentId.startsWith(AutoLocalLibrary.ARTIST_PREFIX) // [fold-mods]
++            val items: List<MediaItem> = autoLocalChildren(parentId) ?: when (parentId) { // [fold-mods]
+                 MEDIA_ROOT_ID -> listOf(
+                     createFolderItem(MEDIA_QUICK_PICKS_ID, getString(R.string.auto_quick_picks), folderType = MediaMetadata.FOLDER_TYPE_PLAYLISTS),
+                     createFolderItem(MEDIA_RECENTS_ID, getString(R.string.auto_recents), folderType = MediaMetadata.FOLDER_TYPE_PLAYLISTS),
+@@ -8900,7 +9004,7 @@ class PlaybackService : MediaLibraryService() {
+                         ),
+                     )
+                 }
+-                MEDIA_PLAYLISTS_ID -> {
++                MEDIA_PLAYLISTS_ID -> listOf(autoLocalShortcutItem()) + run { // [fold-mods]
+                     if (com.music.bitchord.data.innertube.Innertube.cookie == null) {
+                         listOf(createLoginPromptItem())
+                     } else {
+@@ -9007,7 +9111,7 @@ class PlaybackService : MediaLibraryService() {
+                 MEDIA_DOWNLOADS_ID -> createFolderItem(MEDIA_DOWNLOADS_ID, getString(R.string.downloads))
+                 MEDIA_LOCAL_MUSIC_ID -> createFolderItem(MEDIA_LOCAL_MUSIC_ID, getString(R.string.local_music))
+                 "msg:login_required" -> createLoginPromptItem()
+-                else -> {
++                else -> autoLocalItem(mediaId) ?: run { // [fold-mods]
+                     if (mediaId.startsWith("msg:")) {
+                         createInfoItem(
+                             mediaId,
+@@ -9259,6 +9363,11 @@ class PlaybackService : MediaLibraryService() {
+                         songs.forEach { songCache[it.videoId] = it }
+                         resolved.addAll(songs.map { it.toMediaItem() })
+                     }
++                    AutoLocalLibrary.isLocalFolder(id) -> { // [fold-mods]
++                        val local = autoLocalLibrary().songsFor(id).orEmpty()
++                        local.forEach { songCache[it.videoId] = it }
++                        resolved.addAll(local.map { it.toMediaItem() })
++                    }
+                     id == MEDIA_LOCAL_MUSIC_ID -> {
+                         val local = LocalMediaRepository.getLocalMusic(this@PlaybackService)
+                         local.forEach { songCache[it.videoId] = it }
+diff --git a/app/src/main/res/values-it/fold_strings.xml b/app/src/main/res/values-it/fold_strings.xml
+new file mode 100644
+index 0000000..2c709ea
+--- /dev/null
++++ b/app/src/main/res/values-it/fold_strings.xml
+@@ -0,0 +1,17 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- [fold-mods] Musica locale in Android Auto, per artista e album. -->
++<resources>
++    <string name="fold_auto_all_songs">Tutti i brani</string>
++    <string name="fold_auto_various_artists">Artisti vari</string>
++    <string name="fold_auto_other_songs">Altri brani</string>
++    <plurals name="fold_auto_albums">
++        <item quantity="one">%d album</item>
++        <item quantity="many">%d album</item>
++        <item quantity="other">%d album</item>
++    </plurals>
++    <plurals name="fold_auto_songs">
++        <item quantity="one">%d brano</item>
++        <item quantity="many">%d brani</item>
++        <item quantity="other">%d brani</item>
++    </plurals>
++</resources>
+diff --git a/app/src/main/res/values/fold_strings.xml b/app/src/main/res/values/fold_strings.xml
+new file mode 100644
+index 0000000..e2222e6
+--- /dev/null
++++ b/app/src/main/res/values/fold_strings.xml
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="utf-8"?>
++<!-- [fold-mods] Android Auto local music, by artist and album. -->
++<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
++    <string name="fold_auto_all_songs">All songs</string>
++    <string name="fold_auto_various_artists">Various artists</string>
++    <string name="fold_auto_other_songs">Other songs</string>
++    <plurals name="fold_auto_albums">
++        <item quantity="one">%d album</item>
++        <item quantity="other">%d albums</item>
++    </plurals>
++    <plurals name="fold_auto_songs">
++        <item quantity="one">%d song</item>
++        <item quantity="other">%d songs</item>
++    </plurals>
++</resources>
+-- 
+2.43.0
+

@@ -1,10 +1,11 @@
 # BitChord Fold
 
-Build automatica di [BitChord](https://github.com/kushagrasinghx/BitChord) con tre modifiche:
+Build automatica di [BitChord](https://github.com/kushagrasinghx/BitChord) con queste modifiche:
 
 1. **Android Auto segue la playlist.** Toccando un brano dentro una cartella (playlist, album, preferiti, recenti…) viene messa in coda l'intera cartella a partire da quel brano. Prima veniva accodato solo il brano toccato e l'AutoPlay riempiva il resto con canzoni esterne.
 2. **Layout per pieghevoli.** Sullo schermo interno aperto il player resta fisso a sinistra (copertina, titolo, barra, comandi, volume) e la colonna destra mostra testo o coda, scelti con i pulsanti sotto il player. Si attiva anche in orizzontale e sui tablet in orizzontale; un telefono girato di lato mantiene il layout originale.
-3. **App separata.** Si installa come *BitChord Fold* (`com.music.bitchord.fold`) accanto a quella ufficiale, e l'avviso di aggiornamento interno segue le release di questo repository.
+3. **Musica locale ordinata in Android Auto.** La musica sul telefono si sfoglia per artista → album → brani (in ordine di traccia), con una voce *Tutti i brani* in cima. Gli album con brani di artisti diversi finiscono sotto *Artisti vari*, i brani senza album sotto *Altri brani*. In *Playlist* c'è una scorciatoia *Musica locale* come primo riquadro.
+4. **App separata.** Si installa come *BitChord Fold* (`com.music.bitchord.fold`) accanto a quella ufficiale, e l'avviso di aggiornamento interno segue le release di questo repository.
 
 Il sorgente originale non è copiato qui: il repository contiene solo le patch (`patches/`), lo script che le applica e il workflow.
 
@@ -34,6 +35,10 @@ Se lo sviluppatore cambia il codice toccato da una patch, il workflow si ferma e
 5. Apri BitChord Fold e accedi di nuovo con il tuo account Google (è un'app separata, non condivide login e impostazioni con quella ufficiale).
 
 In Android Auto comparirà come *BitChord Fold*. Se non compare, verifica che in Android Auto → Impostazioni sviluppatore sia attiva l'opzione per le fonti sconosciute (serve già per BitChord ufficiale).
+
+## Versioni
+
+Le release si chiamano come quella ufficiale più la revisione del fork, letta dal file `FORK_REVISION`: per esempio `v1.9.1.2` è BitChord 1.9.1 con la revisione 2 delle patch. Quando cambi o aggiungi una patch, aumenta il numero in `FORK_REVISION`: l'app proporrà l'aggiornamento.
 
 ## Ricompilare a mano
 

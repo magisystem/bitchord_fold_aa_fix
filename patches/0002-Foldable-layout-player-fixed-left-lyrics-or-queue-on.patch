@@ -1,7 +1,7 @@
 From 5da3502df90f0d36b3c9fda169a228866af3098e Mon Sep 17 00:00:00 2001
 From: Davide Martelli <reg+ia@davidemartelli.dev>
 Date: Mon, 9 Nov 2026 00:35:56 +0100
-Subject: [PATCH 2/3] Foldable layout: player fixed left, lyrics or queue on
+Subject: [PATCH 2/5] Foldable layout: player fixed left, lyrics or queue on
  the right
 
 Stock BitChord only splits the player into two columns in a window wider

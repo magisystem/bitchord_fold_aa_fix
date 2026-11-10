@@ -1,0 +1,40 @@
+From 3fd81914941791ce2f97e0be2d3720b5d4c608d4 Mon Sep 17 00:00:00 2001
+From: Davide Martelli <reg+ia@davidemartelli.dev>
+Date: Tue, 10 Nov 2026 20:09:22 +0100
+Subject: [PATCH 5/5] Fork revision in the version name and code
+
+FORK_REVISION appends a fourth number to the release (1.9.1 -> 1.9.1.2), so a
+fork rebuilt with new patches is offered as an update over the previous one.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014ZLg5hgq5iTvbfjb7JLYDe
+---
+ app/build.gradle.kts | 12 ++++++++++--
+ 1 file changed, 10 insertions(+), 2 deletions(-)
+
+diff --git a/app/build.gradle.kts b/app/build.gradle.kts
+index c940d64..adde09a 100644
+--- a/app/build.gradle.kts
++++ b/app/build.gradle.kts
+@@ -80,8 +80,16 @@ android {
+         // Haze falls back to a translucent scrim below that.
+         minSdk = 26
+         targetSdk = 36
+-        versionCode = rootProject.extra["bitchordVersionCode"] as Int
+-        versionName = rootProject.extra["bitchordVersionName"] as String
++        // [fold-mods] A fork revision on top of the release: "1.9.1" + rev 2 is
++        // "1.9.1.2", which the in-app updater ranks above 1.9.1 and below 1.9.2,
++        // and a version code that keeps climbing the same way.
++        val forkRevision = System.getenv("FORK_REVISION")?.toIntOrNull()
++        versionCode = (rootProject.extra["bitchordVersionCode"] as Int).let {
++            if (forkRevision != null) it * 100 + forkRevision else it
++        }
++        versionName = (rootProject.extra["bitchordVersionName"] as String).let {
++            if (forkRevision != null) "$it.$forkRevision" else it
++        }
+ 
+         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+ 
+-- 
+2.43.0
+

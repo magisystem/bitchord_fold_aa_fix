@@ -35,8 +35,12 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.pick.outputs.tag }}
+      release_tag: ${{ steps.pick.outputs.release_tag }}
+      revision: ${{ steps.pick.outputs.revision }}
       build: ${{ steps.pick.outputs.build }}
     steps:
+      - uses: actions/checkout@v4
+
       - name: Trova la release upstream
         id: pick
         env:
@@ -48,9 +52,15 @@ jobs:
           if [ -z "$tag" ]; then
             tag=$(gh api "repos/$UPSTREAM/releases/latest" --jq .tag_name)
           fi
-          echo "Release upstream: $tag"
+          # Revisione del fork (file FORK_REVISION): va aumentata quando cambiano
+          # le patch, così la release v1.9.1.3 si distingue dalla v1.9.1.2.
+          rev=$(tr -dc '0-9' < FORK_REVISION)
+          release_tag="${tag}.${rev}"
+          echo "Release upstream: $tag -> release del fork: $release_tag"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
-          if [ "$FORCE" != "true" ] && gh release view "$tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          echo "release_tag=$release_tag" >> "$GITHUB_OUTPUT"
+          echo "revision=$rev" >> "$GITHUB_OUTPUT"
+          if [ "$FORCE" != "true" ] && gh release view "$release_tag" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             echo "Già compilata, niente da fare."
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
@@ -64,6 +74,8 @@ jobs:
     timeout-minutes: 90
     env:
       TAG: ${{ needs.check.outputs.tag }}
+      RELEASE_TAG: ${{ needs.check.outputs.release_tag }}
+      FORK_REVISION: ${{ needs.check.outputs.revision }}
       FORK_UPDATE_REPO: ${{ github.repository }}
     steps:
       - uses: actions/checkout@v4
@@ -130,8 +142,8 @@ jobs:
           out=src/app/build/outputs/apk/prod/release
           ls -la "$out"
           mkdir -p dist
-          cp "$out/app-prod-universal-release.apk" "dist/BitChord-${TAG}.apk"
-          cp "$out/app-prod-arm64-v8a-release.apk" "dist/BitChord-${TAG}_arm64-v8a.apk"
+          cp "$out/app-prod-universal-release.apk" "dist/BitChord-${RELEASE_TAG}.apk"
+          cp "$out/app-prod-arm64-v8a-release.apk" "dist/BitChord-${RELEASE_TAG}_arm64-v8a.apk"
           ls -la dist
 
       - name: Pubblica la release
@@ -140,7 +152,7 @@ jobs:
         run: |
           notes=$(mktemp)
           {
-            echo "BitChord **${TAG}** con le modifiche di questo repository:"
+            echo "BitChord **${TAG}** (revisione fork ${FORK_REVISION}) con le modifiche di questo repository:"
             echo
             for p in patches/*.patch; do
               echo "- $(sed -n 's/^Subject: \[PATCH[^]]*\] //p' "$p" | head -n1)"
@@ -148,9 +160,9 @@ jobs:
             echo
             echo "Novità della versione ufficiale: https://github.com/${UPSTREAM}/releases/tag/${TAG}"
           } > "$notes"
-          gh release delete "$TAG" -R "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
-          gh release create "$TAG" dist/*.apk -R "$GITHUB_REPOSITORY" \
-            --title "BitChord Fold ${TAG}" --notes-file "$notes" --target "$GITHUB_SHA"
+          gh release delete "$RELEASE_TAG" -R "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create "$RELEASE_TAG" dist/*.apk -R "$GITHUB_REPOSITORY" \
+            --title "BitChord Fold ${RELEASE_TAG}" --notes-file "$notes" --target "$GITHUB_SHA"
 
       - name: Segnala la patch da riadattare
         if: failure() && steps.patch.outcome == 'failure'
