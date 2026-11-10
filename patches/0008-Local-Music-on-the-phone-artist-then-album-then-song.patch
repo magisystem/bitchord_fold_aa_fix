@@ -1,4 +1,4 @@
-From 167edf5f9805ce5fdafe873a8149f24107aece5d Mon Sep 17 00:00:00 2001
+From 4518d16a61817b70b75246fa78a0c212093201cd Mon Sep 17 00:00:00 2001
 From: Davide Martelli <reg+ia@davidemartelli.dev>
 Date: Tue, 10 Nov 2026 23:11:45 +0100
 Subject: [PATCH 8/8] Local Music on the phone: artist, then album, then song
