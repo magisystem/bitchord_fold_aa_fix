@@ -1,7 +1,7 @@
 From ba51d42f590ade70debe6bbdc3e48ebcc7f7dce6 Mon Sep 17 00:00:00 2001
 From: Davide Martelli <reg+ia@davidemartelli.dev>
 Date: Tue, 10 Nov 2026 22:33:28 +0100
-Subject: [PATCH 6/6] Android Auto: Playlists folder survives a slow connection
+Subject: [PATCH 6/8] Android Auto: Playlists folder survives a slow connection
 
 The playlists fetch gave up after 3 s, which a car on mobile data easily
 misses, and the folder then stayed on "No playlists available". Allow 8 s,

@@ -4,8 +4,9 @@ Build automatica di [BitChord](https://github.com/kushagrasinghx/BitChord) con q
 
 1. **Android Auto segue la playlist.** Toccando un brano dentro una cartella (playlist, album, preferiti, recenti…) viene messa in coda l'intera cartella a partire da quel brano. Prima veniva accodato solo il brano toccato e l'AutoPlay riempiva il resto con canzoni esterne.
 2. **Layout per pieghevoli.** Sullo schermo interno aperto il player resta fisso a sinistra (copertina, titolo, barra, comandi, volume) e la colonna destra mostra testo o coda, scelti con i pulsanti sotto il player. Si attiva anche in orizzontale e sui tablet in orizzontale; un telefono girato di lato mantiene il layout originale.
-3. **Musica locale ordinata in Android Auto.** La musica sul telefono si sfoglia per artista → album → brani (in ordine di traccia), con una voce *Tutti i brani* in cima. Gli album con brani di artisti diversi finiscono sotto *Artisti vari*, i brani senza album sotto *Altri brani*. In *Playlist* c'è una scorciatoia *Musica locale* come primo riquadro.
-4. **App separata.** Si installa come *BitChord Fold* (`com.music.bitchord.fold`) accanto a quella ufficiale, e l'avviso di aggiornamento interno segue le release di questo repository.
+3. **Musica locale ordinata in Android Auto.** La musica sul telefono si sfoglia per artista → album → brani (in ordine di traccia), con una voce *Tutti i brani* in cima. Gli album con brani di artisti diversi finiscono sotto *Artisti vari*, i brani senza album sotto *Altri brani*. In *Playlist* c'è una scorciatoia *Musica locale* come primo riquadro, con un'icona a cartella. Se le playlist tardano ad arrivare (rete lenta in auto), la cartella si riempie da sola appena arrivano.
+4. **Musica locale ordinata sul telefono.** *Musica locale* si apre sulla scheda *Artisti*; un artista si apre sui suoi *Album* (con una scheda *Brani* accanto) e un album sui suoi brani. Nell'album i brani seguono il numero di traccia e, se manca, il nome del file letto numericamente ("2" prima di "10"), cioè l'ordine della cartella.
+5. **App separata.** Si installa come *BitChord Fold* (`com.music.bitchord.fold`) accanto a quella ufficiale, e l'avviso di aggiornamento interno segue le release di questo repository.
 
 Il sorgente originale non è copiato qui: il repository contiene solo le patch (`patches/`), lo script che le applica e il workflow.
 

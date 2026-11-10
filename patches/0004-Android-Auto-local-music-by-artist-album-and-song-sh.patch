@@ -1,7 +1,7 @@
 From 0d693dcd66440d3a3cd076c7589eeaa880646e0a Mon Sep 17 00:00:00 2001
 From: Davide Martelli <reg+ia@davidemartelli.dev>
 Date: Tue, 10 Nov 2026 20:09:22 +0100
-Subject: [PATCH 4/6] Android Auto: local music by artist, album and song;
+Subject: [PATCH 4/8] Android Auto: local music by artist, album and song;
  shortcut in Playlists
 
 Stock BitChord lists the device's music in Auto as one flat list sorted by

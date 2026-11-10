@@ -1,0 +1,205 @@
+From cb684e0a2224e950cabca1a7813b305d9505e6a0 Mon Sep 17 00:00:00 2001
+From: Davide Martelli <reg+ia@davidemartelli.dev>
+Date: Tue, 10 Nov 2026 23:11:45 +0100
+Subject: [PATCH 8/8] Local Music on the phone: artist, then album, then song
+
+Local Music now opens on its Artists tab. An artist grouped out of a device
+folder opens as a folder page of its own, on its Albums (then a Songs tab),
+so the device's music reads artist -> album -> song. Album tracks follow
+their track tags and, without them, their file names read numerically, the
+order the folder lists them in; Android Auto's albums use the same order.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+Claude-Session: https://claude.ai/code/session_014ZLg5hgq5iTvbfjb7JLYDe
+---
+ .../java/com/music/bitchord/MainActivity.kt   | 28 +++++++++++--
+ .../com/music/bitchord/data/LocalGroups.kt    | 42 ++++++++++++++++++-
+ .../bitchord/playback/AutoLocalLibrary.kt     |  7 ++--
+ .../music/bitchord/ui/screens/LocalFolder.kt  | 10 ++++-
+ 4 files changed, 77 insertions(+), 10 deletions(-)
+
+diff --git a/app/src/main/java/com/music/bitchord/MainActivity.kt b/app/src/main/java/com/music/bitchord/MainActivity.kt
+index 7d5caa1..9831417 100644
+--- a/app/src/main/java/com/music/bitchord/MainActivity.kt
++++ b/app/src/main/java/com/music/bitchord/MainActivity.kt
+@@ -3146,7 +3146,10 @@ private fun BitChordApp(
+                             // this same release page: the header any playlist has, then
+                             // Songs / Artists / Albums under it. An album or artist
+                             // picked there opens as a page of its own — see LocalGroups.
+-                            val folder = if (page.browseId.isDeviceFolder()) {
++                            // [fold-mods] An artist grouped out of a device folder is a
++                            // folder page too: Albums, then Songs.
++                            val isLocalArtist = LocalGroups.isArtist(page.browseId)
++                            val folder = if (page.browseId.isDeviceFolder() || isLocalArtist) {
+                                 val isDownloads = page.browseId == "local:downloads"
+                                 val isCache = page.browseId == CACHE_FOLDER_BROWSE_ID
+                                 // The whole device: the one folder that is an offline
+@@ -3164,7 +3167,22 @@ private fun BitChordApp(
+                                     if (isDownloads) Downloads.collectionsAmong(folderSongs) else emptyList()
+                                 }
+                                 LocalFolder(
+-                                    state = localFolderStates.getOrPut(page.browseId) { LocalFolderState() },
++                                    // [fold-mods] Local Music opens on Artists, an artist on its albums.
++                                    state = localFolderStates.getOrPut(page.browseId) {
++                                        LocalFolderState(
++                                            when {
++                                                // An artist with no album tags at all has
++                                                // nothing for Albums to show: open on Songs.
++                                                isLocalArtist -> if (folderSongs.any { it.albumName != null }) {
++                                                    LocalFolderTab.ALBUMS
++                                                } else {
++                                                    LocalFolderTab.SONGS
++                                                }
++                                                isDevice -> LocalFolderTab.ARTISTS
++                                                else -> LocalFolderTab.SONGS
++                                            },
++                                        )
++                                    },
+                                     sort = folderSortOf(page.browseId),
+                                     viewType = folderViewTypeOf(page.browseId),
+                                     collections = downloadCollections,
+@@ -3201,7 +3219,11 @@ private fun BitChordApp(
+                                     },
+                                     onDownload = if (isCache) downloadFromCache else null,
+                                     onRemoveFromCache = if (isCache) removeFromCache else null,
+-                                    tabs = if (isDevice) LocalFolderTab.DEVICE else LocalFolderTab.BASIC,
++                                    tabs = when {
++                                        isLocalArtist -> LocalFolderTab.ARTIST_PAGE // [fold-mods]
++                                        isDevice -> LocalFolderTab.DEVICE
++                                        else -> LocalFolderTab.BASIC
++                                    },
+                                     playlists = if (isDevice) offlinePlaylistGroups else emptyList(),
+                                     onCreatePlaylist = if (isDevice) ({ creatingOfflinePlaylist = true }) else null,
+                                 )
+diff --git a/app/src/main/java/com/music/bitchord/data/LocalGroups.kt b/app/src/main/java/com/music/bitchord/data/LocalGroups.kt
+index c2cfa0f..ac1c1f4 100644
+--- a/app/src/main/java/com/music/bitchord/data/LocalGroups.kt
++++ b/app/src/main/java/com/music/bitchord/data/LocalGroups.kt
+@@ -124,10 +124,13 @@ object LocalGroups {
+      * together, because a tag grouping is a guess and a recorded release is not.
+      */
+     fun albumsOf(
+-        folderId: String,
++        pageId: String,
+         songs: List<Song>,
+         collections: List<DownloadedCollection>,
+     ): List<LocalGroup> {
++        // [fold-mods] An artist's page lists its albums too: they are pages of
++        // the folder the artist was grouped out of, not of the artist.
++        val folderId = folderOf(pageId) ?: pageId
+         val asked = collections.map { collection ->
+             LocalGroup(
+                 browseId = Downloads.pageIdFor(collection.id),
+@@ -277,13 +280,48 @@ private fun List<Song>.sortedByTitle(): List<Song> =
+  * sort after tagged ones rather than interleaving at the head.
+  */
+ fun List<Song>.sortedForAlbum(): List<Song> {
+-    if (none { it.trackNumber != null }) return this
++    // [fold-mods] With no track tags, files named "01 - …", "02 - …" still
++    // play in the order their folder lists them, by file name read
++    // numerically ("2" before "10"), rather than in title order.
++    if (none { it.trackNumber != null } && none { it.localPath != null }) return this
+     return sortedWith(
+         compareBy<Song> { it.trackNumber ?: Int.MAX_VALUE }
++            .then(FileNameOrder)
+             .thenBy(String.CASE_INSENSITIVE_ORDER) { it.title },
+     )
+ }
+ 
++/**
++ * [fold-mods] Songs by file name as a file manager orders them: runs of digits
++ * compare as numbers, so "2 Song" precedes "10 Song". Rows with no path last.
++ */
++private object FileNameOrder : Comparator<Song> {
++    private val chunks = Regex("""\d+|\D+""")
++
++    private fun Song.fileName(): String? =
++        localPath?.replace('\\', '/')?.substringAfterLast('/')?.lowercase(Locale.ROOT)
++
++    override fun compare(a: Song, b: Song): Int {
++        val x = a.fileName()
++        val y = b.fileName()
++        if (x == null || y == null) return compareValues(x == null, y == null)
++        val xs = chunks.findAll(x).map { it.value }.toList()
++        val ys = chunks.findAll(y).map { it.value }.toList()
++        for (i in 0 until minOf(xs.size, ys.size)) {
++            val p = xs[i]
++            val q = ys[i]
++            val diff = if (p[0].isDigit() && q[0].isDigit()) {
++                val byValue = p.trimStart('0').length.compareTo(q.trimStart('0').length)
++                if (byValue != 0) byValue else p.trimStart('0').compareTo(q.trimStart('0'))
++            } else {
++                p.compareTo(q)
++            }
++            if (diff != 0) return diff
++        }
++        return xs.size.compareTo(ys.size)
++    }
++}
++
+ /**
+  * Whether a track list is one album's own tracks rather than an artist's mixed
+  * rows: every song names the same album and at least one carries a tag number.
+diff --git a/app/src/main/java/com/music/bitchord/playback/AutoLocalLibrary.kt b/app/src/main/java/com/music/bitchord/playback/AutoLocalLibrary.kt
+index 906cd3a..9983140 100644
+--- a/app/src/main/java/com/music/bitchord/playback/AutoLocalLibrary.kt
++++ b/app/src/main/java/com/music/bitchord/playback/AutoLocalLibrary.kt
+@@ -2,6 +2,7 @@ package com.music.bitchord.playback
+ 
+ import android.net.Uri
+ import com.music.bitchord.data.model.Song
++import com.music.bitchord.data.sortedForAlbum
+ import java.text.Collator
+ import java.util.Locale
+ 
+@@ -64,8 +65,6 @@ internal object AutoLocalLibrary {
+ 
+     fun build(songs: List<Song>): Library {
+         val collator = Collator.getInstance().apply { strength = Collator.PRIMARY }
+-        val trackOrder = compareBy<Song> { it.trackNumber ?: Int.MAX_VALUE }
+-            .thenBy(collator) { it.title }
+ 
+         class Group(val artistKey: String, val artistName: String?, val albumKey: String, val title: String?, val songs: List<Song>)
+ 
+@@ -79,7 +78,9 @@ internal object AutoLocalLibrary {
+                 artistName = artist,
+                 albumKey = key,
+                 title = tracks.first().albumName!!.trim(),
+-                songs = tracks.sortedWith(trackOrder),
++                // Track tags first, then file names read numerically — the
++                // folder's own order — as the phone's album pages use too.
++                songs = tracks.sortedForAlbum(),
+             )
+         }
+         loose.groupBy { artistKey(leadArtist(it.artist)) }.forEach { (key, tracks) ->
+diff --git a/app/src/main/java/com/music/bitchord/ui/screens/LocalFolder.kt b/app/src/main/java/com/music/bitchord/ui/screens/LocalFolder.kt
+index a856492..27e4483 100644
+--- a/app/src/main/java/com/music/bitchord/ui/screens/LocalFolder.kt
++++ b/app/src/main/java/com/music/bitchord/ui/screens/LocalFolder.kt
+@@ -167,6 +167,12 @@ enum class LocalFolderTab {
+ 
+         /** Local Music's: the whole device, so its playlists and directories too. */
+         val DEVICE = entries.toList()
++
++        /**
++         * [fold-mods] An artist grouped out of a device folder: its albums first,
++         * each opening on its tracks in order, then all its songs.
++         */
++        val ARTIST_PAGE = listOf(ALBUMS, SONGS)
+     }
+ }
+ 
+@@ -179,8 +185,8 @@ enum class LocalFolderTab {
+  * playlist appear to select unrelated albums.
+  */
+ @Stable
+-class LocalFolderState {
+-    var tab by mutableStateOf(LocalFolderTab.SONGS)
++class LocalFolderState(initialTab: LocalFolderTab = LocalFolderTab.SONGS) { // [fold-mods]
++    var tab by mutableStateOf(initialTab)
+ 
+     var selectedIds by mutableStateOf<Set<String>>(emptySet())
+         private set
+-- 
+2.43.0
+
